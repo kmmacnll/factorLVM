@@ -4,9 +4,9 @@ scikit-learn>=1.4
 xgboost>=2.0
 pymc>=5.10
 arviz>=0.17
-lifelines>=0.28
 plotly>=5.20
 pyyaml>=6.0
 python-dotenv>=1.0
 requests>=2.31
 
+psycopg2-binary>=2.9

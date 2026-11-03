@@ -52,7 +52,8 @@ def pull_spend(cfg: dict, since: str, until: str) -> pd.DataFrame:
         print("[meta] no insights returned for that range")
         return df
     m = cfg["columns"]["ad_spend"]
-    out = pd.DataFrame({m["date"]: df["date_start"], m["campaign"]: df["campaign_name"],
+    # campaign-level spend (factor-data's ads.v_project_daily is per project; this pull is per campaign)
+    out = pd.DataFrame({m["date"]: df["date_start"], m.get("campaign", "campaign"): df["campaign_name"],
                         m["spend"]: pd.to_numeric(df["spend"])})
     for extra in ["impressions", "clicks"]:
         if extra in df:
@@ -68,6 +69,12 @@ def _sha(x) -> str | None:
     return hashlib.sha256(str(x).strip().lower().encode()).hexdigest()
 
 
+def _clean(x) -> str | None:
+    if x is None or (isinstance(x, float) and pd.isna(x)) or pd.isna(x) or str(x).strip() in ("", "(missing)"):
+        return None
+    return str(x).strip()
+
+
 def _norm_phone(x) -> str | None:
     if x is None or pd.isna(x):
         return None
@@ -80,8 +87,16 @@ def build_events(scored: pd.DataFrame, cfg: dict, as_of: pd.Timestamp) -> list[d
     recent = scored[scored["created_at"] >= as_of - pd.Timedelta(days=mc["send_only_new_leads_days"])]
     events = []
     for r in recent.itertuples(index=False):
-        ud = {k: v for k, v in {"em": [_sha(getattr(r, "email", None))],
-                                "ph": [_sha(_norm_phone(getattr(r, "phone", None)))]}.items() if v[0]}
+        # factor-data exports sha256 hashes of the normalised email/phone (track.people.email_hash /
+        # phone_hash), never the raw values. Raw email/phone are still hashed here if a CSV has them.
+        # TODO verify: factor-data's normalisation matches Meta's (email trimmed + lowercased; phone digits
+        # only, with country code) - otherwise CAPI match rates will be poor.
+        em = _clean(getattr(r, "email_hash", None)) or _sha(getattr(r, "email", None))
+        ph = _clean(getattr(r, "phone_hash", None)) or _sha(_norm_phone(getattr(r, "phone", None)))
+        ud = {k: v for k, v in {"em": [em], "ph": [ph]}.items() if v[0]}
+        fbp = _clean(getattr(r, "fbp", None))
+        if fbp:
+            ud["fbp"] = fbp                                     # browser id: sent unhashed, per Meta's spec
         if not ud:
             continue  # Meta can't match an event with no identifiers
         events.append({

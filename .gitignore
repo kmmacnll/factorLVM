@@ -4,3 +4,9 @@ outputs/
 __pycache__/
 *.pyc
 .venv/
+*.pkl
+.pytest_cache/
+docs/factor-data-guide.md
+*factor-data*guide*.md
+.env.*
+!.env.example

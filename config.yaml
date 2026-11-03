@@ -1,55 +1,79 @@
 # =============================================================================
 #  Factor Lead Value Engine - configuration
 #  The only file you should need to edit (plus .env for secrets).
+#  Column names below match what sql/*.sql (python run.py --extract) and
+#  scripts/generate_sandbox_data.py write - the two produce the same CSV shape.
 # =============================================================================
 
 data:
-  leads_csv: data/leads.csv          # one row per lead (Meta lead form / landing page)
-  outcomes_csv: data/outcomes.csv    # one row per lead from the CRM (stage, close date, revenue)
-  ad_spend_csv: data/ad_spend.csv    # optional: daily spend per campaign (or pull it with --pull-meta)
+  leads_csv: data/leads.csv          # one row per person x project (opt-in + what was known at submission)
+  outcomes_csv: data/outcomes.csv    # one row per lead: furthest stage, lost flag, won date, deal value
+  ad_spend_csv: data/ad_spend.csv    # project x day spend (ads.v_project_daily)
   as_of_date: null                   # "YYYY-MM-DD" to freeze "today"; null = max date in the data
+  timezone: America/New_York         # business day for every project today (core.projects.timezone)
+  # Projects are factor-data's partition key (core.projects.slug). They become the engine's
+  # client_id, so the Bayesian deal-size model pools across projects.
+  projects: [nirvana]                # projects to model; null = every project not excluded below
+  exclude_projects:                  # lead-gen lane: no sales calls, "won" = a sold/placed lead
+    - senior-care-leads              # Assist
+    - insuracove-aus                 # Insuracove (also AUD, from a Google Sheet)
 
 # -----------------------------------------------------------------------------
 # Column mapping:  standard_name: YOUR_column_name
-# Left side is what the code uses. Right side is the header in your CSV.
-# Delete a line (or set it to null) if you don't have that column.
+# Left side is what the code uses. Right side is the header in the CSV.
 # -----------------------------------------------------------------------------
 columns:
   leads:
-    lead_id: lead_id
-    created_at: created_at
-    client_id: client_id             # which Factor client the lead belongs to (used for pooling)
-    campaign: campaign_name
-    adset: adset_name
-    ad: ad_name
-    platform: platform               # facebook / instagram / ...
-    placement: placement             # feed / stories / reels / ...
-    email: email                     # only used (hashed) when pushing values back to Meta
-    phone: phone
+    lead_id: lead_id                 # "<project slug>:<person_id>"
+    created_at: opt_in_at            # crm.contacts.date_created (first contact), UTC
+    client_id: project               # core.projects.slug
+    campaign: utm_campaign           # null before 2026-07-01 (Meta history) - becomes "(missing)"
+    adset: utm_term
+    ad: utm_content
+    email_hash: email_hash           # sha256 of normalised email - only used for the CAPI push
+    phone_hash: phone_hash
+    fbp: fbp
   outcomes:
     lead_id: lead_id
-    stage: stage                     # furthest funnel stage reached
-    is_lost: is_lost                 # 1 if the lead was disqualified / lost
-    closed_at: closed_at             # date the deal was won (blank if not won)
-    deal_value: deal_value           # revenue of the won deal (blank if not won)
+    stage: stage                     # furthest canonical stage reached (non-inferred stage history)
+    is_lost: is_lost                 # 1 if disqualified / lost
+    closed_at: won_date              # calendar date the deal was won (blank if not won)
+    deal_value: deal_value           # value_corrected_minor / 100 (blank if not won or no value)
   ad_spend:
     date: date
-    campaign: campaign_name
+    client_id: project
     spend: spend
 
-# Funnel stages in order. The last one is "won".
+# Engine funnel, in order; the last stage is "won". Canonical factor-data stages that are not on
+# this ladder are folded in with stage_aliases (disqualified / lost / refund come through is_lost).
 funnel:
-  stages: [new, contacted, qualified, proposal, won]
+  stages: [lead, contacted, booked, showed, qualified, proposal, won]
+  stage_aliases:
+    no_show: booked                  # booked but did not show
+    deposit: proposal
+    onboarding: won
 
-# Features the models are allowed to see. ONLY things known the moment the lead
-# arrives - never CRM activity (calls, emails...) or you leak the answer.
+# Features the models are allowed to see. ONLY things known the moment the lead arrives.
 features:
-  categorical: [client_id, campaign, adset, platform, placement, q_budget, q_timeline, q_property_type]
-  numeric: []
-  time_features: true                # adds hour-of-day, day-of-week, month
+  categorical: [client_id, campaign, adset, q_investment, q_timeline, q_situation]
+  numeric: [has_application, typeform_score]
+  time_features: true                # hour-of-day, day-of-week, month (in data.timezone)
+
+leakage:
+  # flv/data.py refuses to run (LeakageError) if a forbidden column is listed under features, or is
+  # present in leads.csv at all. Its built-in list (FORBIDDEN_FEATURES) always applies: current-state CRM
+  # columns (funnel_stage, status, current_stage, ...), setter/closer fields (lead_quality, appointment_at,
+  # call_at, sold_at, payment_*, sale_*, ...), decide.v_lead_outcomes dates (booked_at, showed_at, won_at)
+  # and outcome columns. Add project-specific post-contact fields here (e.g. a Close custom field the
+  # setter fills in after the first call):
+  forbidden_columns: []
+  forbidden_prefixes: []
 
 model:
-  horizon_days: 90                   # "closed within N days of lead creation" is the target
+  # "closed within N days of opt-in" is the target. Meta history only starts 2026-07-01, so a long
+  # horizon would leave almost no mature leads with ad-level features; 45 days keeps July-September
+  # opt-ins in the training/test window. Raise it as history accumulates.
+  horizon_days: 45
   test_fraction: 0.2                 # newest X% of mature leads held out for testing (time split)
   xgboost:
     n_estimators: 300
@@ -64,7 +88,7 @@ model:
     tune: 1000
     chains: 2
     advi_iterations: 30000
-    features: [q_budget, q_property_type, platform]   # small, interpretable set for the Bayesian regression
+    features: [q_investment, q_situation]   # small, interpretable set for the Bayesian regression
 
 simulation:
   n_sims: 5000                       # Monte Carlo draws
@@ -75,7 +99,6 @@ simulation:
 meta:
   event_name: Lead                   # event the value is attached to in the Conversions API
   value_field: expected_value        # which prediction to send: expected_value | p50_value
-  currency: CAD
+  currency: USD
   send_only_new_leads_days: 7        # only push leads created in the last N days
   dry_run: true                      # true = build + save payloads but DON'T send. Flip to false when ready.
-
