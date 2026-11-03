@@ -99,6 +99,20 @@ The built-in list can't be weakened from config. Add project-specific post-conta
 - **Spend is per project.** `ads.v_project_daily` has no campaign split, so ROAS and P(beats target) are reported per project (`project_simulation.csv`); campaign-level output is value only.
 - **Freshness.** ScaleLogix is frozen from 2026-10-21. Lead-gen projects are excluded.
 
+## The dashboard (runs locally, no hosting)
+
+`outputs/dashboard.html` is a single self-contained file: Plotly and all data are embedded, so it opens straight from disk and works offline. There is nothing to deploy. Every run rebuilds it from whatever is in `data/`:
+
+```bash
+python run.py --demo --open      # sandbox data -> dashboard opens in your browser
+python run.py --extract --open   # real factor-data (DATABASE_URL in .env) -> dashboard
+python run.py --open             # your own CSVs already in data/ -> dashboard
+```
+
+Or double-click `outputs/dashboard.html`. To share a run, send the HTML file. It contains lead-level scores (lead ids, campaigns, values) but no emails, phones or hashes, so treat it as internal.
+
+To plug in data without the database, drop `leads.csv`, `outcomes.csv` and (optionally) `ad_spend.csv` into `data/` with the columns `config.yaml` maps. `python scripts/generate_sandbox_data.py --out data/` writes an example of each.
+
 ## Outputs (`outputs/`, git-ignored)
 
 | File | What it is |

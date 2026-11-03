@@ -105,7 +105,7 @@ def train(ds: Dataset, cfg: dict) -> ValueModel:
         rows.append({"term": f, "kind": "feature", "mean": e.mean(), "lo": np.percentile(e, 3), "hi": np.percentile(e, 97)})
     for j, c in enumerate(clients):
         e = np.exp(post["client_effect"][:, j]) - 1
-        rows.append({"term": f"client: {c}", "kind": "client", "mean": e.mean(), "lo": np.percentile(e, 3),
+        rows.append({"term": f"project: {c}", "kind": "client", "mean": e.mean(), "lo": np.percentile(e, 3),
                      "hi": np.percentile(e, 97)})
     vm = ValueModel(feat_cols, raw, clients if has_client else [], post, pd.DataFrame(rows))
 

@@ -29,6 +29,14 @@ def _base(fig: go.Figure, title: str, sub: str = "", h: int = 380, **kw) -> go.F
     return fig
 
 
+NO_ATTRIBUTION = "(no ad attribution)"
+
+
+def _label(s: pd.Series) -> pd.Series:
+    """Campaign / ad set "(missing)" = opt-ins before Meta history (2026-07-01), organic or unlinked accounts."""
+    return s.astype(str).replace("(missing)", NO_ATTRIBUTION)
+
+
 def _money(x):
     return f"${x:,.0f}"
 
@@ -36,7 +44,7 @@ def _money(x):
 def fig_campaign_mc(summ: pd.DataFrame, window: int) -> go.Figure:
     d = summ.sort_values("rev_mean")
     fig = go.Figure(go.Bar(
-        x=d.rev_mean, y=d.iloc[:, 0].astype(str), orientation="h", marker=dict(color=S1, cornerradius=4),
+        x=d.rev_mean, y=_label(d.iloc[:, 0]), orientation="h", marker=dict(color=S1, cornerradius=4),
         error_x=dict(type="data", symmetric=False, array=d.rev_p90 - d.rev_mean, arrayminus=d.rev_mean - d.rev_p10,
                      color=INK2, thickness=1.5, width=4),
         customdata=np.c_[d.rev_p10, d.rev_p90, d.leads, d.value_per_lead],
@@ -131,7 +139,7 @@ def fig_value_effects(vm) -> go.Figure:
         hovertemplate="<b>%{y}</b><br>%{x:+.0%} deal size<br>94% CrI %{customdata[0]:+.0%} to %{customdata[1]:+.0%}<extra></extra>"))
     fig.add_vline(x=0, line=dict(color=MUTED, width=1))
     return _base(fig, "Bayesian deal-size model — effect of each attribute",
-                 "% change in deal value vs. baseline · 94% credible intervals · orange = client (partially pooled)",
+                 "% change in deal value vs. baseline · 94% credible intervals · orange = project (partially pooled)",
                  h=max(360, 26 * len(s) + 120), xaxis_tickformat="+.0%", showlegend=False)
 
 
@@ -198,28 +206,33 @@ def fig_mc_total(total: np.ndarray, window: int) -> go.Figure:
     p10, p50, p90 = np.percentile(total, [10, 50, 90])
     fig = go.Figure(go.Histogram(x=total, nbinsx=60, marker=dict(color=S1, line=dict(color=SURF, width=1)),
                                  hovertemplate="%{x:$,.0f}<br>%{y} sims<extra></extra>"))
-    for v, nm, pos in [(p10, "P10", "top left"), (p50, "P50", "top right"), (p90, "P90", "top right")]:
+    for v, nm, pos in [(p10, "P10", "top left"), (p50, "P50", "top"), (p90, "P90", "top right")]:
         fig.add_vline(x=v, line=dict(color=INK, width=1.5 if nm == "P50" else 1, dash="solid" if nm == "P50" else "dot"),
-                      annotation_text=f"{nm} {_money(v)}", annotation_font_color=INK2, annotation_position=pos)
+                      annotation_text=nm, annotation_font_color=INK2, annotation_position=pos)
     return _base(fig, "Simulated total value from recent leads",
-                 f"{len(total):,} Monte Carlo runs over every lead from the last {window} days",
+                 f"{len(total):,} Monte Carlo runs over every lead from the last {window} days · "
+                 f"P10 {_money(p10)} · P50 {_money(p50)} · P90 {_money(p90)}",
                  xaxis_title="Total value (revenue × margin)", yaxis_title="Simulations", xaxis_tickprefix="$", bargap=0.02, showlegend=False)
 
 
 def fig_backtest(bt: pd.DataFrame) -> go.Figure:
+    bt = bt.sort_values("predicted")
     m = max(bt.predicted.max(), bt.actual.max()) * 1.1
     fig = go.Figure([
         go.Scatter(x=[0, m], y=[0, m], mode="lines", line=dict(color=MUTED, dash="dot", width=1.5), name="Perfect", hoverinfo="skip"),
-        go.Scatter(x=bt.predicted, y=bt.actual, mode="markers+text", text=bt.iloc[:, 0], textposition="top center",
+        go.Scatter(x=bt.predicted, y=bt.actual, mode="markers+text", text=_label(bt.iloc[:, 0]), cliponaxis=False,
+                   textposition=["bottom center" if i % 2 else "top center" for i in range(len(bt))],
                    textfont=dict(size=10, color=INK2), name="Campaign",
                    marker=dict(size=12, color=S1, line=dict(color=SURF, width=2)),
                    customdata=np.c_[bt.leads, bt.pred_closes, bt.actual_closes],
                    hovertemplate="<b>%{text}</b><br>Predicted %{x:$,.0f}<br>Actual %{y:$,.0f}<br>%{customdata[0]} leads · "
                                  "%{customdata[1]:.1f} predicted vs %{customdata[2]} actual closes<extra></extra>")])
     err = (bt.predicted.sum() - bt.actual.sum()) / max(bt.actual.sum(), 1)
-    return _base(fig, "Backtest: predicted vs. actual value", f"Held-out period, per campaign · total error {err:+.1%}",
+    fig = _base(fig, "Backtest: predicted vs. actual value", f"Held-out period, per campaign · total error {err:+.1%}",
                  h=400, xaxis_title="Predicted value", yaxis_title="Actual value", xaxis_tickprefix="$",
                  yaxis_tickprefix="$", showlegend=False)
+    fig.update_layout(margin=dict(r=110))                     # room for labels of the right-most campaigns
+    return fig
 
 
 def fig_value_dist(scored: pd.DataFrame) -> go.Figure:
@@ -246,6 +259,7 @@ def _table(df: pd.DataFrame) -> str:
     fmt = {"p_close_at_submit": "{:.1%}", "p_close_now": "{:.1%}", "value_if_won": "${:,.0f}", "expected_value_now": "${:,.0f}"}
     head = "".join(f"<th>{html.escape(c.replace('_', ' '))}</th>" for c in cols)
     rows = []
+    df = df.assign(campaign=_label(df["campaign"])) if "campaign" in df.columns else df
     for _, r in df[cols].iterrows():
         cells = []
         for c in cols:
