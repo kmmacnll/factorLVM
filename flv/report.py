@@ -36,7 +36,7 @@ def _money(x):
 def fig_campaign_mc(summ: pd.DataFrame, window: int) -> go.Figure:
     d = summ.sort_values("rev_mean")
     fig = go.Figure(go.Bar(
-        x=d.rev_mean, y=d.campaign, orientation="h", marker=dict(color=S1, cornerradius=4),
+        x=d.rev_mean, y=d.iloc[:, 0].astype(str), orientation="h", marker=dict(color=S1, cornerradius=4),
         error_x=dict(type="data", symmetric=False, array=d.rev_p90 - d.rev_mean, arrayminus=d.rev_mean - d.rev_p10,
                      color=INK2, thickness=1.5, width=4),
         customdata=np.c_[d.rev_p10, d.rev_p90, d.leads, d.value_per_lead],
@@ -48,9 +48,10 @@ def fig_campaign_mc(summ: pd.DataFrame, window: int) -> go.Figure:
 
 
 def fig_value_vs_cpl(summ: pd.DataFrame, target: float) -> go.Figure | None:
-    if "cpl" not in summ:
+    if summ is None or "cpl" not in summ or not (summ.spend > 0).any():
         return None
     d = summ[summ.spend > 0]
+    name = d.columns[0]
     mx = max(d.cpl.max(), d.value_per_lead.max() / target) * 1.15
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=[0, mx], y=[0, mx * target], mode="lines", line=dict(color=MUTED, dash="dot", width=1.5),
@@ -60,7 +61,7 @@ def fig_value_vs_cpl(summ: pd.DataFrame, target: float) -> go.Figure | None:
         x = d[mask].sort_values("value_per_lead")
         pos = ["bottom center" if i % 2 else "top center" for i in range(len(x))]
         fig.add_trace(go.Scatter(
-            x=x.cpl, y=x.value_per_lead, mode="markers+text", name=nm, text=x.campaign, textposition=pos,
+            x=x.cpl, y=x.value_per_lead, mode="markers+text", name=nm, text=x[name].astype(str), textposition=pos,
             textfont=dict(size=10, color=INK2),
             marker=dict(size=np.sqrt(x.leads) * 1.3 + 8, color=col, line=dict(color=SURF, width=2), opacity=0.9),
             customdata=np.c_[x.roas_mean, x.p_beats_target_roas, x.leads],
@@ -68,7 +69,7 @@ def fig_value_vs_cpl(summ: pd.DataFrame, target: float) -> go.Figure | None:
                           "Predicted ROAS %{customdata[0]:.1f}x<br>P(beats target) %{customdata[1]:.0%}<br>"
                           "%{customdata[2]} leads<extra></extra>"))
     return _base(fig, "What a lead is worth vs. what it costs",
-                 "Above the dotted line = campaign clears target ROAS · bubble size = lead volume",
+                 f"Per {'project' if name == 'client_id' else name} · above the dotted line = clears target ROAS · bubble size = lead volume",
                  h=460, xaxis_title="Cost per lead", yaxis_title="Predicted value per lead",
                  xaxis_tickprefix="$", yaxis_tickprefix="$", xaxis_range=[0, mx])
 
@@ -255,7 +256,7 @@ def _table(df: pd.DataFrame) -> str:
     return f"<table><thead><tr>{head}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
 
 
-def build(path, ds, cm, vm, fm, scored, summ, total, bt, cfg) -> str:
+def build(path, ds, cm, vm, fm, scored, summ, total, bt, cfg, proj_summ=None) -> str:
     window = cfg["model"]["horizon_days"]
     target = cfg["simulation"]["target_roas"]
     p10, p90 = np.percentile(total, [10, 90])
@@ -267,12 +268,14 @@ def build(path, ds, cm, vm, fm, scored, summ, total, bt, cfg) -> str:
         ("Median deal", _money(won_vals.median()) if len(won_vals) else "—", f"{len(won_vals):,} won deals"),
         (f"Value of last {window}d leads", _money(total.mean()), f"80% range {_money(p10)} – {_money(p90)}"),
     ]
-    if "spend" in summ:
-        sp = summ.spend.sum()
+    roas_src = proj_summ if proj_summ is not None and "spend" in proj_summ else summ
+    if "spend" in roas_src:
+        sp = roas_src.spend.sum()
         kpis.append(("Predicted ROAS", f"{total.mean() / sp:.2f}×" if sp else "—", f"on {_money(sp)} spend · target {target:g}×"))
 
     figs = [
-        ("Where the money is", [fig_campaign_mc(summ, window), fig_value_vs_cpl(summ, target)]),
+        ("Where the money is", [fig_campaign_mc(summ, window), fig_value_vs_cpl(summ, target)
+                                or fig_value_vs_cpl(proj_summ, target)]),
         ("Lead scoring model (XGBoost, calibrated)", [fig_calibration(cm), fig_lift(cm), fig_roc(cm), fig_importance(cm)]),
         ("Deal value model (hierarchical Bayesian)", [fig_value_effects(vm), fig_ppc(vm)]),
         ("Funnel & timing", [fig_funnel(fm, ds), fig_stage_rates(fm), fig_survival(fm, ds)]),

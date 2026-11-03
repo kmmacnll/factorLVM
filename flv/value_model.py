@@ -57,7 +57,11 @@ def train(ds: Dataset, cfg: dict) -> ValueModel:
     import pymc as pm
 
     vc = cfg["model"]["value_model"]
-    won = ds.df[(ds.df["won"] == 1) & (ds.df["deal_value"] > 0)].copy()
+    all_won = ds.df[ds.df["won"] == 1]
+    # ~85% of factor-data deals carry no value: train only on won deals that have one
+    won = all_won[all_won["deal_value"] > 0].copy()
+    print(f"[value] using {len(won):,} of {len(all_won):,} won deals that have a deal value "
+          f"({len(all_won) - len(won):,} won without a value are left out)")
     if len(won) < 20:
         raise ValueError(f"Only {len(won)} won deals with a deal_value - need at least ~20 for the value model.")
     raw = [c for c in vc["features"] if c in won.columns]
