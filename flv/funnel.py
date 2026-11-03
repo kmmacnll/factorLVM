@@ -12,14 +12,14 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-from lifelines import KaplanMeierFitter
 
 from .data import Dataset
+from .km import KaplanMeier
 
 
 @dataclass
 class FunnelModel:
-    km: KaplanMeierFitter
+    km: KaplanMeier
     horizon: float
     stage_names: list[str]
     transition_draws: np.ndarray       # [draws, n_stages-1] P(reach k+1 | reached k)
@@ -47,7 +47,7 @@ class FunnelModel:
 
 def fit(ds: Dataset, cfg: dict, n_draws: int = 4000) -> FunnelModel:
     df, K, H = ds.df, len(ds.stages), cfg["model"]["horizon_days"]
-    km = KaplanMeierFitter().fit(df["surv_T"], df["surv_E"], label="time to close")
+    km = KaplanMeier().fit(df["surv_T"], df["surv_E"], label="time to close")
 
     m = df[df["mature"]]
     rng = np.random.default_rng(cfg["simulation"]["seed"])
