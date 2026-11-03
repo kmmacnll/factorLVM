@@ -1,5 +1,6 @@
 """Factor Lead Value Engine - one command to run everything.
 
+    python run.py --extract              # pull data/*.csv from factor-data (DATABASE_URL in .env), then run
     python run.py --demo                 # generate sandbox data into data/ and run the full pipeline
     python run.py                        # run on the CSVs in data/ (see config.yaml)
     python run.py --pull-meta 2026-07-01 # first pull daily campaign spend from Meta into data/ad_spend.csv
@@ -63,6 +64,8 @@ def run(cfg: dict, out: Path, push_meta: bool = False) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default="config.yaml")
+    ap.add_argument("--extract", action="store_true", help="extract data/*.csv from factor-data first (needs DATABASE_URL)")
+    ap.add_argument("--extract-only", action="store_true", help="extract and stop (don't train)")
     ap.add_argument("--demo", action="store_true", help="generate sandbox data into data/ first")
     ap.add_argument("--pull-meta", metavar="SINCE", help="pull spend from Meta since YYYY-MM-DD (until today)")
     ap.add_argument("--push-meta", action="store_true", help="push predicted values to the Conversions API")
@@ -73,6 +76,11 @@ def main() -> None:
     cfg = data.load_config(a.config)
     out = Path(a.out)
 
+    if a.extract or a.extract_only:
+        from flv import extract
+        extract.extract(cfg)
+        if a.extract_only:
+            return
     if a.demo:
         _sandbox().generate(Path(cfg["data"]["leads_csv"]).parent)
     if a.pull_meta:
