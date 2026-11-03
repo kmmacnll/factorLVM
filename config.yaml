@@ -1,1 +1,81 @@
+# =============================================================================
+#  Factor Lead Value Engine - configuration
+#  The only file you should need to edit (plus .env for secrets).
+# =============================================================================
+
+data:
+  leads_csv: data/leads.csv          # one row per lead (Meta lead form / landing page)
+  outcomes_csv: data/outcomes.csv    # one row per lead from the CRM (stage, close date, revenue)
+  ad_spend_csv: data/ad_spend.csv    # optional: daily spend per campaign (or pull it with --pull-meta)
+  as_of_date: null                   # "YYYY-MM-DD" to freeze "today"; null = max date in the data
+
+# -----------------------------------------------------------------------------
+# Column mapping:  standard_name: YOUR_column_name
+# Left side is what the code uses. Right side is the header in your CSV.
+# Delete a line (or set it to null) if you don't have that column.
+# -----------------------------------------------------------------------------
+columns:
+  leads:
+    lead_id: lead_id
+    created_at: created_at
+    client_id: client_id             # which Factor client the lead belongs to (used for pooling)
+    campaign: campaign_name
+    adset: adset_name
+    ad: ad_name
+    platform: platform               # facebook / instagram / ...
+    placement: placement             # feed / stories / reels / ...
+    email: email                     # only used (hashed) when pushing values back to Meta
+    phone: phone
+  outcomes:
+    lead_id: lead_id
+    stage: stage                     # furthest funnel stage reached
+    is_lost: is_lost                 # 1 if the lead was disqualified / lost
+    closed_at: closed_at             # date the deal was won (blank if not won)
+    deal_value: deal_value           # revenue of the won deal (blank if not won)
+  ad_spend:
+    date: date
+    campaign: campaign_name
+    spend: spend
+
+# Funnel stages in order. The last one is "won".
+funnel:
+  stages: [new, contacted, qualified, proposal, won]
+
+# Features the models are allowed to see. ONLY things known the moment the lead
+# arrives - never CRM activity (calls, emails...) or you leak the answer.
+features:
+  categorical: [client_id, campaign, adset, platform, placement, q_budget, q_timeline, q_property_type]
+  numeric: []
+  time_features: true                # adds hour-of-day, day-of-week, month
+
+model:
+  horizon_days: 90                   # "closed within N days of lead creation" is the target
+  test_fraction: 0.2                 # newest X% of mature leads held out for testing (time split)
+  xgboost:
+    n_estimators: 300
+    max_depth: 3                     # shallow trees + strong regularisation: lead data is noisy, deep trees overfit
+    learning_rate: 0.03
+    subsample: 0.8
+    colsample_bytree: 0.8
+    min_child_weight: 20
+  value_model:
+    method: advi                     # "nuts" = full MCMC (slower, gold standard) | "advi" = fast variational
+    draws: 1000
+    tune: 1000
+    chains: 2
+    advi_iterations: 30000
+    features: [q_budget, q_property_type, platform]   # small, interpretable set for the Bayesian regression
+
+simulation:
+  n_sims: 5000                       # Monte Carlo draws
+  gross_margin: 0.35                 # SET THIS: client's gross margin. Values become profit, not revenue (1.0 = revenue)
+  target_roas: 2.0                   # target return on ad spend (on the margin-adjusted value) - sets max affordable CPL
+  seed: 42
+
+meta:
+  event_name: Lead                   # event the value is attached to in the Conversions API
+  value_field: expected_value        # which prediction to send: expected_value | p50_value
+  currency: CAD
+  send_only_new_leads_days: 7        # only push leads created in the last N days
+  dry_run: true                      # true = build + save payloads but DON'T send. Flip to false when ready.
 
