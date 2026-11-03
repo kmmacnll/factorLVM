@@ -47,6 +47,76 @@ def to_business_date(s: pd.Series, tz: str) -> pd.Series:
     return out
 
 
+# ---------------------------------------------------------------------------------------------------------
+# Leakage guard. These can never be model inputs (factor-data guide, section 7):
+#   * current-state CRM columns (where the lead is NOW, i.e. the answer)
+#   * fields a setter / closer fills in after contact
+#   * decide.v_lead_outcomes dates (not point-in-time) and deal outcome fields
+# This list is hard-coded on purpose; config.yaml `leakage:` can only ADD to it.
+# ---------------------------------------------------------------------------------------------------------
+FORBIDDEN_FEATURES = frozenset({
+    # current state
+    "funnel_stage", "status", "stage_label", "current_stage", "stage_id", "status_id", "status_label",
+    "ltv_minor", "is_customer",
+    # filled in during the sales process
+    "lead_quality", "appointment_at", "call_at", "sold_at", "closing_type", "sale_type", "payment_type",
+    "payment_method", "cash_collected", "cash_collected_minor", "contract_signed", "refund_state", "product",
+    "self_gen",
+    # last-change timestamps
+    "date_updated", "synced_at", "status_changed_at",
+    # decide.v_lead_outcomes / deal outcomes
+    "booked_at", "showed_at", "won_at", "lost_at", "won_value_minor", "value_minor", "value_corrected_minor",
+    "value_source", "won_at_precision",
+})
+FORBIDDEN_PREFIXES = ("setter_", "closer_", "payment_", "sale_")
+# engine outcome / label columns - also never features
+OUTCOME_COLUMNS = frozenset({"stage", "stage_idx", "stage_at", "is_lost", "won", "won_date", "closed_at", "deal_value",
+                             "label", "days_to_close", "mature", "age_days", "is_open", "surv_T", "surv_E"})
+
+
+class LeakageError(ValueError):
+    """A post-opt-in / outcome column was offered to the model."""
+
+
+def _forbidden(cfg: dict) -> tuple[set[str], tuple[str, ...]]:
+    lk = cfg.get("leakage") or {}
+    cols = set(FORBIDDEN_FEATURES) | {c.lower() for c in lk.get("forbidden_columns") or []}
+    pre = FORBIDDEN_PREFIXES + tuple(p.lower() for p in lk.get("forbidden_prefixes") or [])
+    return cols, pre
+
+
+def _is_forbidden(col: str, cols: set[str], pre: tuple[str, ...]) -> bool:
+    c = str(col).strip().lower()
+    return c in cols or c.startswith(pre)
+
+
+def check_leakage(cfg: dict, lead_columns: list[str] | None = None) -> None:
+    """Raise LeakageError if a forbidden column is a configured feature, or is present in leads.csv at all.
+
+    leads.csv is supposed to hold only what is known at opt-in; a post-contact column there means the
+    extraction is wrong, so we stop rather than silently drop it.
+    """
+    cols, pre = _forbidden(cfg)
+    f = cfg.get("features") or {}
+    vm = (cfg.get("model") or {}).get("value_model") or {}
+    requested = list(f.get("categorical") or []) + list(f.get("numeric") or []) + list(vm.get("features") or [])
+    bad = sorted({c for c in requested if _is_forbidden(c, cols, pre) or str(c).lower() in OUTCOME_COLUMNS})
+    if bad:
+        raise LeakageError(
+            f"LEAKAGE: {bad} are listed as model features but are known only after the lead arrives "
+            f"(current CRM state, setter/closer fields, outcome dates). Remove them from features / "
+            f"model.value_model.features in config.yaml.")
+    if lead_columns is not None:
+        mapped_outcomes = {v for v in (cfg.get("columns", {}).get("outcomes") or {}).values() if v} - {"lead_id"}
+        present = sorted({c for c in lead_columns if _is_forbidden(c, cols, pre)
+                          or (str(c).lower() in OUTCOME_COLUMNS | {m.lower() for m in mapped_outcomes}
+                              and str(c).lower() != "lead_id")})
+        if present:
+            raise LeakageError(
+                f"LEAKAGE: leads.csv contains post-opt-in / outcome columns {present}. leads.csv must hold only "
+                f"what is known at opt-in - fix the extraction (sql/leads.sql) or drop these columns.")
+
+
 @dataclass
 class Dataset:
     df: pd.DataFrame            # one row per lead, all features + labels
@@ -78,7 +148,10 @@ def load(cfg: dict) -> Dataset:
     aliases = {k.lower(): v.lower() for k, v in (cfg["funnel"].get("stage_aliases") or {}).items()}
     tz = d.get("timezone", "America/New_York")
 
-    leads = _rename(pd.read_csv(d["leads_csv"]), cols["leads"], ["lead_id", "created_at"], "leads")
+    check_leakage(cfg)                                       # features named in config
+    raw_leads = pd.read_csv(d["leads_csv"])
+    check_leakage(cfg, list(raw_leads.columns))              # columns actually in leads.csv
+    leads = _rename(raw_leads, cols["leads"], ["lead_id", "created_at"], "leads")
     outc = _rename(pd.read_csv(d["outcomes_csv"]), cols["outcomes"], ["lead_id", "stage"], "outcomes")
     leads = _filter_projects(leads, d, "leads")
 

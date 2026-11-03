@@ -59,6 +59,16 @@ features:
   numeric: [has_application, typeform_score]
   time_features: true                # hour-of-day, day-of-week, month (in data.timezone)
 
+leakage:
+  # flv/data.py refuses to run (LeakageError) if a forbidden column is listed under features, or is
+  # present in leads.csv at all. Its built-in list (FORBIDDEN_FEATURES) always applies: current-state CRM
+  # columns (funnel_stage, status, current_stage, ...), setter/closer fields (lead_quality, appointment_at,
+  # call_at, sold_at, payment_*, sale_*, ...), decide.v_lead_outcomes dates (booked_at, showed_at, won_at)
+  # and outcome columns. Add project-specific post-contact fields here (e.g. a Close custom field the
+  # setter fills in after the first call):
+  forbidden_columns: []
+  forbidden_prefixes: []
+
 model:
   # "closed within N days of opt-in" is the target. Meta history only starts 2026-07-01, so a long
   # horizon would leave almost no mature leads with ad-level features; 45 days keeps July-September
