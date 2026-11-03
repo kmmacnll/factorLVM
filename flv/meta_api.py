@@ -52,7 +52,8 @@ def pull_spend(cfg: dict, since: str, until: str) -> pd.DataFrame:
         print("[meta] no insights returned for that range")
         return df
     m = cfg["columns"]["ad_spend"]
-    out = pd.DataFrame({m["date"]: df["date_start"], m["campaign"]: df["campaign_name"],
+    # campaign-level spend (factor-data's ads.v_project_daily is per project; this pull is per campaign)
+    out = pd.DataFrame({m["date"]: df["date_start"], m.get("campaign", "campaign"): df["campaign_name"],
                         m["spend"]: pd.to_numeric(df["spend"])})
     for extra in ["impressions", "clicks"]:
         if extra in df:
