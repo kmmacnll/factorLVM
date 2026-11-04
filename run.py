@@ -4,6 +4,7 @@
     python run.py --demo                 # generate sandbox data into data/ and run the full pipeline
     python run.py                        # run on the CSVs in data/ (see config.yaml)
     python run.py --pull-meta 2026-07-01 # first pull daily campaign spend from Meta into data/ad_spend.csv
+    python run.py --open                 # ... and open outputs/dashboard.html in your browser when done
     python run.py --push-meta            # also send predicted values to Meta CAPI (respects meta.dry_run)
 """
 from __future__ import annotations
@@ -13,6 +14,7 @@ import importlib.util
 import json
 import pickle
 import time
+import webbrowser
 from pathlib import Path
 
 import pandas as pd
@@ -70,6 +72,7 @@ def main() -> None:
     ap.add_argument("--pull-meta", metavar="SINCE", help="pull spend from Meta since YYYY-MM-DD (until today)")
     ap.add_argument("--push-meta", action="store_true", help="push predicted values to the Conversions API")
     ap.add_argument("--out", default="outputs")
+    ap.add_argument("--open", action="store_true", help="open the dashboard in your browser when done")
     a = ap.parse_args()
 
     t0 = time.time()
@@ -87,7 +90,10 @@ def main() -> None:
         meta_api.pull_spend(cfg, a.pull_meta, pd.Timestamp.today().strftime("%Y-%m-%d"))
 
     run(cfg, out, push_meta=a.push_meta)
-    print(f"\nDone in {time.time() - t0:.0f}s. Open {out / 'dashboard.html'} in your browser.")
+    dash = (out / "dashboard.html").resolve()
+    print(f"\nDone in {time.time() - t0:.0f}s. Dashboard: {dash}")
+    if a.open:
+        webbrowser.open(dash.as_uri())      # a self-contained file: no server or internet needed
 
 
 if __name__ == "__main__":
